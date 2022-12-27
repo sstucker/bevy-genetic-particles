@@ -1,16 +1,21 @@
 use bevy::{
     prelude::*,
+    sprite::MaterialMesh2dBundle,
     window::{WindowMode, PresentMode}
 };
-use bevy_tasks::TaskPool;
-use bevy::sprite::MaterialMesh2dBundle;
+use bevy::sprite::ColorMaterial;
 use bevy::time::FixedTimestep;
 use rand::Rng;
+
+const SCALE_FACTOR: f32 = 1.0;
 
 const WINDOW_H: f32 = 1000.;
 const WINDOW_W: f32 = 1000.;
 
-const N_PARTICLES: u32 = 2000;
+const SPEED_LIMIT: f32 = 10.0;
+const FRICTION: f32 = 0.99;
+
+const N_PARTICLES: u32 = 1000;
 
 pub mod quadtree;
 pub use quadtree::*;
@@ -52,77 +57,137 @@ fn force(
     }
 }
 
+const EVOLUTION_PROBABILITY: f32 = 0.2;  // Likelihood that any given gene will increment
 
-const R_RANGE: f32 = 32.;
-const R_STRENGTH: f32 = 120.;
-const F_RANGE: f32 = 300.;
-const F_STRENGTH: f32 = 3.;
+const MINIMUM_SIZE: f32 = 80.;
 
 // -- TODO load these from JSON at runtime ----------------
 
-const DIVISION_RATE_MAX: f32 = 0.25;
-const DIVISION_RATE_MIN: f32 = 0.001;
+const DIVISION_PROB_MAX: f32 = 0.01;
+const DIVISION_PROB_MIN: f32 = 0.0001;
 
 const DIVISION_ASYM_MAX: f32 = 0.5;
 const DIVISION_ASYM_MIN: f32 = 0.1;
 
-const DIVISION_MIN_SIZE_MAX: f32 = 10.;
-const DIVISION_MIN_SIZE_MIN: f32 = 1.;
+const DIVISION_MIN_SIZE_MAX: f32 = 1000.;
+const DIVISION_MIN_SIZE_MIN: f32 = 500.;
 
-const REPULSION_RANGE_MAX: f32 = 100.;
-const REPULSION_RANGE_MIN: f32 = 5.;
+const REPULSION_RANGE_MAX: f32 = 20.0;
+const REPULSION_RANGE_MIN: f32 = 2.0;
 
-const REPULSION_STRENGTH_MAX: f32 = 300.;
-const REPULSION_STRENGTH_MIN: f32 = 50.;
+const REPULSION_STRENGTH_MAX: f32 = 0.1;
+const REPULSION_STRENGTH_MIN: f32 = 0.01;
 
-const FORCE_RANGE_MAX: f32 = 600.;
-const FORCE_RANGE_MIN: f32 = 20.;
+const FORCE_RANGE_MAX: f32 = 1000.0;
+const FORCE_RANGE_MIN: f32 = 10.0;
 
-const FORCE_STRENGTH_MAX: f32 = 10.;
-const FORCE_STRENGTH_MIN: f32 = -10.;
+const FORCE_STRENGTH_MAX: f32 = 0.0001;
+const FORCE_STRENGTH_MIN: f32 = -0.0001;
+
+const EAT_RATE_MIN: f32 = -0.010;
+const EAT_RATE_MAX: f32 = 0.010;
 
 // -------------------------------------------------------
 
-#[derive(Component)]
+struct CellSpawnEvent {
+    pos: Vec2,
+    vel: Vec2,
+    size: f32,
+    genome: Genome
+}
+
+#[derive(Component, Clone, Copy)]
 struct Genome {
     charge: usize,
-    division_rate: u8,
+    division_prob: u8,
     division_asym: u8,
     division_min_size: u8,
     repulsion_range: [u8; 255],
     repulsion_strength: [u8; 255],
     force_range: [u8; 255],
-    force_strength: [u8; 255]
+    force_strength: [u8; 255],
+    eat_rate: [u8; 255]
 }
 
 impl Genome {
     fn new() -> Self {
         Self {
-            charge: 128,
-            division_rate: range_to_u8(DIVISION_RATE_MIN, DIVISION_RATE_MAX, 0.01),
-            division_asym: range_to_u8(DIVISION_ASYM_MIN, DIVISION_ASYM_MAX, 0.5),
-            division_min_size: range_to_u8(DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX, 2.),
-            repulsion_range: [range_to_u8(REPULSION_RANGE_MIN, REPULSION_RANGE_MAX, R_RANGE); 255],
-            repulsion_strength: [range_to_u8(REPULSION_STRENGTH_MIN, REPULSION_STRENGTH_MAX, R_STRENGTH); 255],
-            force_range: [range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, F_RANGE); 255],
-            force_strength: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, F_STRENGTH); 255]
+            charge: 1,
+            division_prob: range_to_u8(DIVISION_PROB_MIN, DIVISION_PROB_MAX, 0.5 * (DIVISION_PROB_MIN + DIVISION_PROB_MAX)),
+            division_asym: range_to_u8(DIVISION_ASYM_MIN, DIVISION_ASYM_MAX, 0.5 * (DIVISION_ASYM_MIN + DIVISION_ASYM_MAX)),
+            division_min_size: range_to_u8(DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX, 0.5 * (DIVISION_MIN_SIZE_MIN + DIVISION_MIN_SIZE_MAX)),
+            repulsion_range: [range_to_u8(REPULSION_RANGE_MIN, REPULSION_RANGE_MAX, 0.5 * (REPULSION_RANGE_MIN + REPULSION_RANGE_MAX)); 255],
+            repulsion_strength: [range_to_u8(REPULSION_STRENGTH_MIN, REPULSION_STRENGTH_MAX, 0.5 * (REPULSION_STRENGTH_MIN + REPULSION_STRENGTH_MAX)); 255],
+            force_range: [range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, 0.5 * (FORCE_RANGE_MIN + FORCE_RANGE_MAX)); 255],
+            force_strength: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, FORCE_STRENGTH_MAX); 255],
+            eat_rate: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, 0.5 * (FORCE_STRENGTH_MIN + FORCE_STRENGTH_MAX)); 255]
         }
+    }
+
+    fn new2() -> Self {
+        Self {
+            charge: 2,
+            division_prob: range_to_u8(DIVISION_PROB_MIN, DIVISION_PROB_MAX, 0.5 * (DIVISION_PROB_MIN + DIVISION_PROB_MAX)),
+            division_asym: range_to_u8(DIVISION_ASYM_MIN, DIVISION_ASYM_MAX, 0.5 * (DIVISION_ASYM_MIN + DIVISION_ASYM_MAX)),
+            division_min_size: range_to_u8(DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX, 0.5 * (DIVISION_MIN_SIZE_MIN + DIVISION_MIN_SIZE_MAX)),
+            repulsion_range: [range_to_u8(REPULSION_RANGE_MIN, REPULSION_RANGE_MAX, 0.5 * (REPULSION_RANGE_MIN + REPULSION_RANGE_MAX)); 255],
+            repulsion_strength: [range_to_u8(REPULSION_STRENGTH_MIN, REPULSION_STRENGTH_MAX, 0.5 * (REPULSION_STRENGTH_MIN + REPULSION_STRENGTH_MAX)); 255],
+            force_range: [range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, 0.5 * (FORCE_RANGE_MIN + FORCE_RANGE_MAX)); 255],
+            force_strength: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, 0.0); 255],
+            eat_rate: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, 0.5 * (FORCE_STRENGTH_MIN + FORCE_STRENGTH_MAX)); 255]
+        }
+    }
+
+    fn new3() -> Self {
+        let mut g = Self {
+            charge: 3,
+            division_prob: range_to_u8(DIVISION_PROB_MIN, DIVISION_PROB_MAX, 0.2 * (DIVISION_PROB_MIN + DIVISION_PROB_MAX)),
+            division_asym: range_to_u8(DIVISION_ASYM_MIN, DIVISION_ASYM_MAX, 0.2 * (DIVISION_ASYM_MIN + DIVISION_ASYM_MAX)),
+            division_min_size: range_to_u8(DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX, 0.2 * (DIVISION_MIN_SIZE_MIN + DIVISION_MIN_SIZE_MAX)),
+            repulsion_range: [range_to_u8(REPULSION_RANGE_MIN, REPULSION_RANGE_MAX, 0.2 * (REPULSION_RANGE_MIN + REPULSION_RANGE_MAX)); 255],
+            repulsion_strength: [range_to_u8(REPULSION_STRENGTH_MIN, REPULSION_STRENGTH_MAX, 0.2 * (REPULSION_STRENGTH_MIN + REPULSION_STRENGTH_MAX)); 255],
+            force_range: [range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, FORCE_RANGE_MAX); 255],
+            force_strength: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, FORCE_STRENGTH_MAX); 255],
+            eat_rate: [range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, 0.2 * (FORCE_STRENGTH_MIN + FORCE_STRENGTH_MAX)); 255]
+        };
+        g.eat_rate[1] = range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, 0.5 * (FORCE_STRENGTH_MIN + FORCE_STRENGTH_MAX));
+        g.eat_rate[2] = 80;
+        g.force_range[2] = range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, FORCE_RANGE_MAX);
+        g.force_strength[2] = range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, FORCE_STRENGTH_MAX);
+        g.force_range[3] = range_to_u8(FORCE_RANGE_MIN, FORCE_RANGE_MAX, FORCE_RANGE_MIN);
+        g.force_strength[3] = range_to_u8(FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX, FORCE_STRENGTH_MAX);
+        g.division_min_size = range_to_u8(DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX, DIVISION_MIN_SIZE_MAX);
+        g
     }
 }
 
 #[derive(Component)]
 struct Cell {
     id: u32
+    // division_timer: Timer
+}
+
+impl Cell {
+    fn new() -> Self {
+        Self {
+            id: 0,
+            // division_timer = Timer
+        }
+    }
 }
 
 #[derive(Component)]
 struct Velocity {
-    vel: Vec2
+    vel: Vec2,
+    growth: f32
 }
 
 impl Velocity {
     fn new(dx: f32, dy: f32) -> Self {
-        Self { vel: Vec2::new(dx, dy) }
+        Self {
+            vel: Vec2::new(dx, dy),
+            growth: 0.0
+        }
     }
 }
 
@@ -133,14 +198,20 @@ struct Body {
 }
 
 impl Body {
+
     fn new(x: f32, y: f32, mass: f32) -> Self {
         Self { pos: Vec2::new(x, y), mass: mass }
     }
+
+    fn radius(&self) -> f32 {
+        (self.mass / PI).sqrt()
+    }
+
 }
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::rgb(0.2, 0.2, 0.23)))
+        .insert_resource(ClearColor(Color::rgb(0.11, 0.11, 0.15)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             window: WindowDescriptor {
                 title: "Particles ".to_string() + env!("CARGO_PKG_VERSION"),
@@ -152,11 +223,19 @@ fn main() {
             },
             ..default()
         }))
+        .add_event::<CellSpawnEvent>()
         .add_startup_system(setup)
         .add_system_set(
             SystemSet::new()
                 .with_system(motion_system)
                 .with_system(intercell_force_system)
+                .with_system(cell_spawn_system)
+        )
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(FixedTimestep::step(1. / 10.))
+                .with_system(division_system)
+                .with_system(cell_death_system)
         )
         .run();
 }
@@ -164,7 +243,8 @@ fn main() {
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    windows: Res<Windows>
+    windows: Res<Windows>,
+    mut ew_spawn: EventWriter<CellSpawnEvent>
 ) {
     commands.spawn(Camera2dBundle::default());
 
@@ -175,53 +255,126 @@ fn setup(
     // Spawn some particles
     for i in 0..N_PARTICLES {
 
-        let h = window.height() / 2.;
-        let w = window.width() / 2.;
+        let h = window.height() / 9.;
+        let w = window.width() / 9.;
         let x = rng.gen_range(-w..w as f32);
         let y = rng.gen_range(-h..h as f32);
-        
-        let size = rng.gen_range(50.0..500.0 as f32);
-        let d = 2. * (size / PI).sqrt();
+    
+        ew_spawn.send(
+            CellSpawnEvent {
+                size: rng.gen_range(2000.0..2400.0 as f32),
+                pos: Vec2::new(x, y),
+                vel: Vec2::new(0., 0.),
+                genome: Genome::new()  // Default genome
+            }
+        )
+    }
+}
 
-        commands.spawn(Cell {id: i} )
-        .insert( Velocity::new(0., 0.) )
-        .insert( Genome::new() )
-        .insert( Body::new(x, y, size) )
-        // Circle
+fn cell_spawn_system(
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    mut reader: EventReader<CellSpawnEvent>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for e in reader.iter() {
+        let x = e.pos[0];
+        let y = e.pos[1];
+        let dx = e.vel[0];
+        let dy = e.vel[1];
+        let d = 2. * (e.size / PI).sqrt();
+        let c: Color;
+        if e.genome.charge == 3 {
+            c = Color::rgb(0.0, 0.0, 1.0);
+        }
+        else {
+            c = Color::rgb(0.9 - e.genome.charge as f32 / 8., 0.92, 0.91 - e.genome.charge as f32 / 8.);
+        }
+        commands.spawn( Cell::new() )
+        .insert( Velocity::new(dx, dy) )
+        .insert( e.genome )
+        .insert( Body::new(x, y, e.size) )
+        // DEBUG
         // .insert(MaterialMesh2dBundle {
-        //     mesh: meshes.add(shape::Circle::new(5.).into()).into(),
-        //     material: materials.add(ColorMaterial::from(Color::WHITE)),
+        //     mesh: meshes.add(shape::Circle::new(SCALE_FACTOR * d / 2.).into()).into(),
+        //     material: materials.add(Color::rgba(1.0, 1.0, 1.0, 0.1).into()),
         //     transform: Transform::from_translation(Vec3::new(x, y, 0.)),
         //     ..default()
         // });
-        // Sprite
+        // ---
         .insert(SpriteBundle {
             texture: asset_server.load("particle.png"),
             sprite: Sprite {
-                color: Color::rgb(0.7, 0.7, 0.7),
+                color: c,
                 custom_size: Some(Vec2::new(d, d)),
                 ..Default::default()
             },
-            transform: Transform::from_translation(Vec3::new(x, y, 0.)),
+            transform: Transform::from_translation(Vec3::new(x, y, 1.)),
             ..Default::default()
         });
     }
 }
 
 fn motion_system(
-    mut query: Query<(&mut Body, &mut Velocity, &mut Transform)>
+    mut query: Query<(&mut Body, &mut Velocity, &mut Transform, &mut Sprite)>
 ) {
-    query.par_for_each_mut(12, |(mut body, mut velocity, mut transform)| {
-        body.pos = body.pos + velocity.vel;
-        transform.translation = body.pos.extend(0.);
-        velocity.vel = velocity.vel * 0.9;
+    query.par_for_each_mut(12, |(mut body, mut velocity, mut transform, mut sprite)| {
+        // if velocity.vel.length_squared() < SPEED_LIMIT {
+            body.pos = body.pos + velocity.vel;
+            body.mass = body.mass - velocity.growth;
+            sprite.custom_size = Some(Vec2::new(body.radius() * 2., body.radius() * 2.));
+            transform.translation = body.pos.extend(0.);
+        // }
+        velocity.vel = velocity.vel * FRICTION;
+        velocity.growth = velocity.growth * FRICTION;
     });
 }
 
+fn division_system(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Body, &Velocity, &Genome, &Cell)>,
+    mut ew_spawn: EventWriter<CellSpawnEvent>,
+    time: Res<Time>
+) {
+    let mut rng = rand::thread_rng();
+    for (entity, mut body, velocity, genome, cell) in query.iter_mut() {
+        // println!("Body at {}, {}", body.pos[0], body.pos[1]);
+        if body.mass > u8_to_range(genome.division_min_size, DIVISION_MIN_SIZE_MIN, DIVISION_MIN_SIZE_MAX) {
+            if u8_to_range(genome.division_prob, DIVISION_PROB_MIN, DIVISION_PROB_MAX) > rng.gen_range(0.0..1.0) {
+                println!("Cell with mass {} radius {} is dividing!", body.mass, body.radius());
+                let div_prop = u8_to_range(genome.division_asym, DIVISION_ASYM_MIN, DIVISION_ASYM_MAX);
+                body.mass = div_prop * body.mass;  // New size
+                let daughter_size = (1.0 - div_prop) * body.mass;
+                let daughter_angle: f32 = rng.gen_range(0.0..2.*PI);
+                ew_spawn.send(
+                    CellSpawnEvent {
+                        size: daughter_size,
+                        pos: body.pos + Vec2::new(daughter_angle.cos(), daughter_angle.sin()) * body.radius() / 2.,
+                        vel: Vec2::from(velocity.vel) + Vec2::new(daughter_angle.cos(), daughter_angle.sin()),
+                        genome: Genome::new2()  // TODO mutate
+                    }
+                );
+                ew_spawn.send(
+                    CellSpawnEvent {
+                        size: daughter_size,
+                        pos: body.pos - Vec2::new(daughter_angle.cos(), daughter_angle.sin()) * body.radius() / 2.,
+                        vel: Vec2::from(velocity.vel) - Vec2::new(daughter_angle.cos(), daughter_angle.sin()),
+                        genome: Genome::new3()  // TODO mutate
+                    }
+                );
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
 #[inline(always)]
-fn cell_forces(body1: &Body, genome1: &Genome,
-               body2: &Body, genome2: &Genome) -> Vec2 {
-    let distance = body1.pos.distance(body2.pos);
+fn cell_forces(
+    distance: f32,
+    body1: &Body, genome1: &Genome,
+    body2: &Body, genome2: &Genome
+    ) -> Vec2 {
     let r_range = u8_to_range(genome1.repulsion_range[genome2.charge], REPULSION_RANGE_MIN, REPULSION_RANGE_MAX);
     let f_range = u8_to_range(genome1.force_range[genome2.charge], FORCE_RANGE_MIN, FORCE_RANGE_MAX);
     if distance > r_range + f_range { return Vec2::new(0.0, 0.0) }
@@ -229,10 +382,10 @@ fn cell_forces(body1: &Body, genome1: &Genome,
     let f_strength = u8_to_range(genome1.force_strength[genome2.charge], FORCE_STRENGTH_MIN, FORCE_STRENGTH_MAX);
     let f = force(
         distance,
-        r_range,
-        r_strength,
-        f_range,
-        f_strength
+        r_range + body1.radius(),
+        r_strength * body1.mass,
+        f_range + body1.radius(),
+        f_strength * body1.mass
     );
     // a = f/m
     ((body2.pos - body1.pos).normalize() * f) / body1.mass
@@ -243,18 +396,42 @@ fn intercell_force_system(
     q_cells: Query<(Entity, &Body, &Genome)>
 ) {
     for ([(e1, body1, g1), (e2, body2, g2)]) in q_cells.iter_combinations() {
-        // println!("{} <---> {}", e1.index(), e2.index());
+        let distance = body1.pos.distance(body2.pos);
         if let Ok(mut velocity) = q_velocity.get_mut(e1) {
             velocity.vel += cell_forces(
+                distance,
                 body1, g1,
                 body2, g2
-            )
+            );
+            if distance < body1.radius() + body2.radius() {
+                let net_growth = u8_to_range(g1.eat_rate[g2.charge], EAT_RATE_MIN, EAT_RATE_MAX) - u8_to_range(g2.eat_rate[g1.charge], EAT_RATE_MIN, EAT_RATE_MAX);
+                velocity.growth += net_growth;
+                // println!("On god he eatin: {}", net_growth);
+            } 
         }
         if let Ok(mut velocity) = q_velocity.get_mut(e2) {
             velocity.vel += cell_forces(
+                distance,
                 body2, g2,
                 body1, g1
-            )
+            );
+            if distance < body1.radius() + body2.radius() {
+                let net_growth = u8_to_range(g2.eat_rate[g1.charge], EAT_RATE_MIN, EAT_RATE_MAX) - u8_to_range(g1.eat_rate[g2.charge], EAT_RATE_MIN, EAT_RATE_MAX);
+                velocity.growth += net_growth;
+                // println!("On god he eatin: {}", net_growth);
+            } 
+        }
+    }
+}
+
+fn cell_death_system(
+    mut commands: Commands,
+    query: Query<(Entity, &Body)>
+) {
+    for (entity, body) in query.iter() {
+        if body.mass < MINIMUM_SIZE {
+            println!("Cell died!");
+            commands.entity(entity).despawn();
         }
     }
 }
