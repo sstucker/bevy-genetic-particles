@@ -132,9 +132,9 @@ fn motion_system(
     }
 }
 
-const R_RANGE: f32 = 20.;
+const R_RANGE: f32 = 10.;
 const R_STRENGTH: f32 = 0.05;
-const F_RANGE: f32 = 100.;
+const F_RANGE: f32 = 50.;
 const F_STRENGTH: f32 = 0.01;
 
 fn interparticle_force_system(

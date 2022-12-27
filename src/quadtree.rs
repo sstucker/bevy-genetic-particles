@@ -2,7 +2,7 @@ use bevy::{prelude::*};
 
 // TODO tunable in constructor
 const CQT_MAX_OBJECTS_PER_NODE: usize = 16;
-const CQT_MAX_LEVELS: i32 = 8;
+const CQT_MAX_LEVELS: i32 = 4;
 
 // An entity with a position and radius
 #[derive(Clone, Copy)]
