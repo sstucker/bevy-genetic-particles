@@ -196,7 +196,9 @@ name = "bevy-genetic-particles"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_ecs",
  "bevy_prototype_lyon",
+ "bevy_tasks",
  "rand",
 ]
 

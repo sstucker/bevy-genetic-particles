@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.9.1"
+bevy_ecs = "0.9.1"
 bevy_prototype_lyon = "0.7.2"
+bevy_tasks = "0.9.1"
 rand = "0.8.5"
 
 [workspace]
